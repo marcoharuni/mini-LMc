@@ -1,6 +1,18 @@
+# Build artifacts
 build/
-models/
 *.o
-*.gguf
+*.so
+*.a
 minilmc
+
+# Model files (huge, download separately)
+models/*.gguf
+
+# Editor / tooling cache
 .vscode/
+.cache/
+compile_commands.json
+
+# OS junk
+.DS_Store
+*.swp
