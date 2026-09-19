@@ -73,7 +73,7 @@ static void write_header(uint8_t *buf, uint32_t version, uint64_t tensor_count,
 static void test_minimal_valid_gguf(void) {
   TEST("Minimal valid GGUF (no metadata, no tensors)");
 
-  uint8_t buf[24];
+  uint8_t buf[64]; /* 24 header + 40 padding to accommodate alignment */
   write_header(buf, 3, 0, 0);
 
   const char *path = write_test_file(buf, sizeof(buf));
@@ -547,6 +547,12 @@ static void test_valid_alignment_metadata(void) {
   memcpy(buf + pos, &alignment, 4);
   pos += 4;
 
+  /* Ensure file is at least 64 bytes to accommodate aligned tensor_data_offset
+   */
+  if (pos < 64) {
+    pos = 64;
+  }
+
   const char *path = write_test_file(buf, pos);
   if (!path) {
     CHECK(0, "Failed to create test file");
@@ -605,6 +611,124 @@ static void test_invalid_alignment_metadata(void) {
   cleanup_test_file(path);
 }
 
+/* Test: tensor_data_offset exceeds file size */
+static void test_tensor_data_offset_exceeds_file_size(void) {
+  TEST("Tensor data offset exceeds file size");
+
+  uint8_t buf[128];
+  write_header(buf, 3, 0, 1);
+
+  size_t pos = 24;
+
+  /* Metadata: general.alignment = 1024 (power of 2) */
+  uint64_t key_len = 18; /* strlen("general.alignment") */
+  memcpy(buf + pos, &key_len, 8);
+  pos += 8;
+  memcpy(buf + pos, "general.alignment", 18);
+  pos += 18;
+
+  /* Value type: UINT32 */
+  uint32_t vtype = GGUF_TYPE_UINT32;
+  memcpy(buf + pos, &vtype, 4);
+  pos += 4;
+
+  /* Value: 1024 */
+  uint32_t align_val = 1024;
+  memcpy(buf + pos, &align_val, 4);
+  pos += 4;
+
+  /* File ends here (pos = 76). With alignment 1024, tensor_data_offset would
+     be 1024, which exceeds file size (76) */
+
+  const char *path = write_test_file(buf, pos);
+  if (!path) {
+    CHECK(0, "Failed to create test file");
+    return;
+  }
+
+  gguf_file_t f;
+  int result = gguf_load(path, &f);
+
+  CHECK(result != 0, "gguf_load failed (tensor_data_offset exceeds file size)");
+
+  gguf_free(&f);
+  cleanup_test_file(path);
+}
+
+/* Test: tensor offset not aligned to general.alignment */
+static void test_tensor_offset_not_aligned(void) {
+  TEST("Tensor offset not aligned to general.alignment");
+
+  uint8_t buf[512];
+  write_header(buf, 3, 1, 1);
+
+  size_t pos = 24;
+
+  /* Metadata: general.alignment = 64 (power of 2) */
+  uint64_t key_len = 18; /* strlen("general.alignment") */
+  memcpy(buf + pos, &key_len, 8);
+  pos += 8;
+  memcpy(buf + pos, "general.alignment", 18);
+  pos += 18;
+
+  /* Value type: UINT32 */
+  uint32_t vtype = GGUF_TYPE_UINT32;
+  memcpy(buf + pos, &vtype, 4);
+  pos += 4;
+
+  /* Value: 64 */
+  uint32_t align_val = 64;
+  memcpy(buf + pos, &align_val, 4);
+  pos += 4;
+
+  /* Tensor name: "weights" */
+  uint64_t name_len = 7;
+  memcpy(buf + pos, &name_len, 8);
+  pos += 8;
+  memcpy(buf + pos, "weights", 7);
+  pos += 7;
+
+  /* n_dims: 1 */
+  uint32_t n_dims = 1;
+  memcpy(buf + pos, &n_dims, 4);
+  pos += 4;
+
+  /* dimension[0]: 10 */
+  uint64_t dim = 10;
+  memcpy(buf + pos, &dim, 8);
+  pos += 8;
+
+  /* type: F32 (0) */
+  uint32_t type = 0;
+  memcpy(buf + pos, &type, 4);
+  pos += 4;
+
+  /* offset: 33 (NOT aligned to 64, which is power of 2) */
+  uint64_t offset = 33;
+  memcpy(buf + pos, &offset, 8);
+  pos += 8;
+
+  /* Align to 64 and add tensor data */
+  size_t aligned_pos = (pos + 63) / 64 * 64;
+
+  /* Add 40 bytes of tensor data */
+  size_t total_size = aligned_pos + 40;
+
+  const char *path = write_test_file(buf, total_size);
+  if (!path) {
+    CHECK(0, "Failed to create test file");
+    return;
+  }
+
+  gguf_file_t f;
+  int result = gguf_load(path, &f);
+
+  CHECK(result != 0, "gguf_load failed (tensor offset not aligned)");
+
+  gguf_free(&f);
+  cleanup_test_file(path);
+}
+
 int main(void) {
   printf("=== GGUF Loader Test Suite ===\n\n");
 
@@ -630,6 +754,8 @@ int main(void) {
   test_quantized_non_aligned_dim();
   test_tensor_extends_past_eof();
   test_invalid_alignment_metadata();
+  test_tensor_data_offset_exceeds_file_size();
+  test_tensor_offset_not_aligned();
 
   /* Summary */
   printf("\n=== Test Summary ===\n");

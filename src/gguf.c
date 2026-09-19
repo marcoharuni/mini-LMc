@@ -615,6 +615,14 @@ int gguf_load(const char *path, gguf_file_t *out) {
 
   out->tensor_data_offset = aligned_offset;
 
+  /* Reject if tensor_data_offset exceeds file size */
+  if (aligned_offset > file_size) {
+    fprintf(stderr, "Tensor data offset (%zu) exceeds file size (%zu)\n",
+            aligned_offset, file_size);
+    gguf_free(out);
+    return -1;
+  }
+
   /* --- Validate tensor byte ranges --- */
   for (uint64_t i = 0; i < tensor_count; i++) {
     /* Calculate storage size */
@@ -627,8 +635,16 @@ int gguf_load(const char *path, gguf_file_t *out) {
       return -1;
     }
 
-    /* Calculate absolute offset: tensor_data_offset + relative offset */
+    /* Validate tensor offset alignment */
     uint64_t rel_offset = out->tensors[i].offset;
+    if (rel_offset % out->alignment != 0) {
+      fprintf(stderr, "Tensor '%s' offset (%lu) not aligned to %u\n",
+              out->tensors[i].name, rel_offset, out->alignment);
+      gguf_free(out);
+      return -1;
+    }
+
+    /* Calculate absolute offset: tensor_data_offset + relative offset */
     if (rel_offset > SIZE_MAX - out->tensor_data_offset) {
       fprintf(stderr, "Tensor offset overflow for '%s'\n",
               out->tensors[i].name);
